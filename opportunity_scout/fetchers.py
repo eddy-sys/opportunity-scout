@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Iterable
 
-from .http import fetch_json, fetch_text
+from .http import fetch_text
 from .models import Lead
 
 
@@ -37,31 +37,15 @@ def parse_datetime(value: str | None) -> datetime | None:
         return None
 
 
-def fetch_reddit_subreddit(subreddit: str, limit: int = 25) -> list[Lead]:
-    url = f"https://www.reddit.com/r/{subreddit}/new.json?limit={limit}"
-    payload = fetch_json(url, headers={"User-Agent": USER_AGENT})
-    leads: list[Lead] = []
-    for child in payload.get("data", {}).get("children", []):
-        data = child.get("data", {})
-        created_utc = data.get("created_utc")
-        created_at = (
-            datetime.fromtimestamp(float(created_utc), tz=timezone.utc)
-            if created_utc is not None
-            else None
-        )
-        permalink = data.get("permalink") or ""
-        full_url = f"https://www.reddit.com{permalink}" if permalink else data.get("url", "")
-        leads.append(
-            Lead(
-                source=f"reddit/r/{subreddit}",
-                source_id=f"reddit:{data.get('id', full_url)}",
-                url=full_url,
-                title=data.get("title", "").strip(),
-                author=data.get("author", ""),
-                created_at=created_at,
-                raw_text=strip_html(data.get("selftext") or data.get("url") or ""),
-            )
-        )
+def fetch_reddit_subreddit(subreddit: str) -> list[Lead]:
+    # Reddit's public RSS feed — no auth required, unlike the JSON API
+    rss_url = f"https://www.reddit.com/r/{subreddit}/new/.rss"
+    leads = fetch_rss_feed(rss_url)
+    # Normalise source label to match the original reddit/r/<name> format
+    for lead in leads:
+        lead.source = f"reddit/r/{subreddit}"
+        if not lead.source_id.startswith("reddit:"):
+            lead.source_id = f"reddit:{lead.source_id}"
     return leads
 
 
@@ -70,7 +54,7 @@ def fetch_reddit(subreddits: Iterable[str], limit: int = 25) -> tuple[list[Lead]
     errors: list[str] = []
     for subreddit in subreddits:
         try:
-            leads.extend(fetch_reddit_subreddit(subreddit, limit=limit))
+            leads.extend(fetch_reddit_subreddit(subreddit))
         except Exception as exc:  # Keep other sources alive.
             errors.append(f"reddit/r/{subreddit}: {exc}")
     return leads, errors
